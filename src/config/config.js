@@ -1,0 +1,103 @@
+require('dotenv').config();
+const winston = require('winston');
+const chalk = require('chalk');
+
+// Define configuration object
+const config = {
+  ARI_URL: process.env.ARI_URL || 'http://127.0.0.1:8088',
+  ARI_USER: process.env.ARI_USERNAME,
+  ARI_PASS: process.env.ARI_PASSWORD,
+  ARI_APP: 'asterisk_to_openai_rt',
+  
+  // External AI WebSocket Configuration
+  AI_WEBSOCKET_URL: process.env.AI_WEBSOCKET_URL,
+  AI_AUTH_TOKEN: process.env.AI_AUTH_TOKEN,
+  
+  // RTP Configuration
+  RTP_PORT_START: 12000,
+  MAX_CONCURRENT_CALLS: parseInt(process.env.MAX_CONCURRENT_CALLS) || 10,
+  
+  // General Configuration
+  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+  SYSTEM_PROMPT: process.env.SYSTEM_PROMPT,
+  INITIAL_MESSAGE: process.env.INITIAL_MESSAGE || 'Hi',
+  SILENCE_PADDING_MS: parseInt(process.env.SILENCE_PADDING_MS) || 100,
+  CALL_DURATION_LIMIT_SECONDS: parseInt(process.env.CALL_DURATION_LIMIT_SECONDS) || 0, // 0 means no limit
+
+  //Tinybird database configuration
+  DATASOURCE_NAME: process.env.DATASOURCE_NAME || 'otrix_ai_call_logs',
+  TINYBIRD_HOST: process.env.TINYBIRD_HOST || 'https://api.tinybird.co',
+  TINYBIRD_API_TOKEN: process.env.TINYBIRD_API_TOKEN || 'your_tinybird_api_token_here',
+
+  //Bubble database configuration
+  BUBBLE_API_TOKEN: process.env.BUBBLE_API_TOKEN || 'your_bubble_api_token_here',
+  BUBBLE_API_ENDPOINT_URL: process.env.BUBBLE_API_ENDPOINT_URL || 'https://otrix.co/api/1.1/wf',
+  BUBBLE_VERSION_TEST_ENDPOINT_URL: process.env.BUBBLE_VERSION_TEST_ENDPOINT_URL || 'https://otrix.co/version-test/api/1.1/wf',
+  BUBBLE_API_DATABASE_URL: process.env.BUBBLE_API_DATABASE_URL || 'https://otrix.co/version-test/api/1.1/obj'
+};
+
+// Debug logging of loaded configuration
+console.log('Loaded configuration:', {
+  ARI_URL: config.ARI_URL,
+  ARI_USER: config.ARI_USER,
+  ARI_PASS: config.ARI_PASS ? 'set' : 'unset',
+  AI_WEBSOCKET_URL: config.AI_WEBSOCKET_URL,
+  AI_AUTH_TOKEN: config.AI_AUTH_TOKEN ? 'set' : 'unset',
+  LOG_LEVEL: config.LOG_LEVEL,
+  SYSTEM_PROMPT: config.SYSTEM_PROMPT ? 'set' : 'unset',
+  TINYBIRD_API_TOKEN: config.TINYBIRD_API_TOKEN ? 'set' : 'unset',
+  BUBBLE_API_TOKEN: config.BUBBLE_API_TOKEN ? 'set' : 'unset'
+});
+
+// Logger configuration
+let sentEventCounter = 0;
+let receivedEventCounter = -1;
+const logger = winston.createLogger({
+  level: config.LOG_LEVEL,
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => {
+      const [origin] = message.split(' ', 1);
+      let counter, coloredMessage;
+      if (origin === '[Client]') {
+        counter = `C-${sentEventCounter.toString().padStart(4, '0')}`;
+        sentEventCounter++;
+        coloredMessage = chalk.cyanBright(message);
+      } else if (origin === '[AI]') {
+        counter = `A-${receivedEventCounter.toString().padStart(4, '0')}`;
+        receivedEventCounter++;
+        coloredMessage = chalk.yellowBright(message);
+      } else {
+        counter = 'N/A';
+        coloredMessage = chalk.gray(message);
+      }
+      return `${counter} | ${timestamp} [${level.toUpperCase()}] ${coloredMessage}`;
+    })
+  ),
+  transports: [
+    new winston.transports.Console()
+  ]
+});
+
+// Validate critical configurations
+if (!config.SYSTEM_PROMPT || config.SYSTEM_PROMPT.trim() === '') {
+  logger.error('SYSTEM_PROMPT is missing or empty in .env');
+  process.exit(1);
+}
+logger.info('SYSTEM_PROMPT loaded from .env');
+
+if (config.CALL_DURATION_LIMIT_SECONDS < 0) {
+  logger.error('CALL_DURATION_LIMIT_SECONDS cannot be negative in .env');
+  process.exit(1);
+}
+logger.info(`CALL_DURATION_LIMIT_SECONDS set to ${config.CALL_DURATION_LIMIT_SECONDS} seconds`);
+
+const logClient = (msg, level = 'info') => logger[level](`[Client] ${msg}`);
+const logAI = (msg, level = 'info') => logger[level](`[AI] ${msg}`);
+
+module.exports = {
+  config,
+  logger,
+  logClient,
+  logAI
+};
