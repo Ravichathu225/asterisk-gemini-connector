@@ -1,6 +1,6 @@
 const express = require('express');
 const AmiClient = require('asterisk-ami-client');
-const { config, logger } = require('./config');
+const { config, logger } = require('../config/config');
 
 // Configuration
 const AMI_CONFIG = {

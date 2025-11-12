@@ -1,6 +1,6 @@
 const { initializeAriClient } = require('./src/asterisk');
 const { config, logger } = require('./src/config/config');
-// const { app } = require('./src/api/freepbx-setup');
+const { app } = require('./src/api/freepbx-setup');
 
 async function startApplication() {
   try {
