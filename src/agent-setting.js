@@ -83,29 +83,35 @@ class AgentSetting {
             throw new Error("No agent settings found.");
         }
         const agentData = agent_setting_data.data[0];
-        const orgUid = agentData.org_uid;
+        const orgUid = agentData['a.org_uid'];
         // const accountBalance = await this._fetchAccountBalance(orgUid);
 
         //map the data to class properties
-        this.prompt = agentData.agent_prompt;
-        this.voice = agentData.agent_voice;
-        this.firstSentence = agentData.first_sentence;
-        this.name = agentData.agent_name;
-        this.userId = agentData.phone_no_uid;
-        this.accountBalance = agentData.available_credit;
-        this.temperature = agentData.agent_temperature;
-        this.maxTokens = agentData.max_tokens;
-        this.twilioAccountId = agentData.twilio_account_sid;
-        this.twilioAccountToken = agentData.twilio_account_token;
-        this.documentData = agentData.knowledge_base;
-        this.generateResponseModel = agentData.generate_response_model;
-        this.agentId = agentData.call_ai_agent_id;
+        this.prompt = agentData['a.agent_prompt'];
+        this.voice = agentData['a.agent_voice'];
+        this.firstSentence = agentData['a.first_sentence'];
+        this.name = agentData['a.agent_name'];
+        this.userId = agentData['t.phone_no_uid'];
+        this.accountBalance = agentData['o.available_credit'];
+        this.temperature = agentData['a.agent_temperature'];
+        this.maxTokens = agentData['a.max_tokens'];
+        this.twilioAccountId = agentData['t.twilio_account_sid'];
+        this.twilioAccountToken = agentData['t.twilio_account_token'];
+        this.documentData = agentData['a.knowledge_base'];
+        this.generateResponseModel = agentData['a.generate_response_model'];
+        this.agentId = agentData['t.call_ai_agent_id'];
         this.orgUid = orgUid;
-        this.transferNumber = agentData.transfer_number || null;
-        this.otrixMainPrompt = agentData.otrix_main_prompt || null;
-        this.costOfCall = agentData.cost_of_call ?? 0.27;
+        this.transferNumber = agentData['transfer_number'] || null;
+        this.otrixMainPrompt = agentData['otrix_main_prompt'] || null;
+        this.costOfCall = agentData['cost_of_call'] ?? 0.27;
 
-        console.info(`✅ Successfully fetched and mapped prompt data for phone number: ${this.phoneNumber} and org_uid: ${orgUid}`);
+        if (!this.orgUid){
+            throw new Error("orgUid is missing in the fetched data.");
+        }else{
+            console.info(`✅ Successfully fetched and mapped agent settings for phone number: ${this.phoneNumber} and org_uid: ${orgUid}`);
+        }
+
+        // console.info(`✅ Successfully fetched and mapped prompt data for phone number: ${this.phoneNumber} and org_uid: ${orgUid}`);
 
     } catch (error) {
       if (error.response) {

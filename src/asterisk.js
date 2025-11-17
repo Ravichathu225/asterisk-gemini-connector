@@ -172,8 +172,14 @@ async function initializeAriClient() {
           attempts++;
         }
         if (mapping) {
-          await addExtToBridge(ariClient, channel, mapping.bridgeId);
-          logger.info(`Bridge ${mapping.bridgeId} ready for audio routing, external channel ${channel.id} active with codec ulaw`);
+          try {
+            await addExtToBridge(ariClient, channel, mapping.bridgeId);
+            logger.info(`Bridge ${mapping.bridgeId} ready for audio routing, external channel ${channel.id} active with codec ulaw`);
+          } catch (e) {
+            logger.error(`Failed to add ExternalMedia channel ${channel.id} to bridge: ${e.message}`);
+            // Cleanup the mapping
+            extMap.delete(channel.id);
+          }
         } else {
           logger.error(`No mapping found for ExternalMedia channel ${channel.id} after ${maxAttempts} attempts`);
         }
@@ -240,7 +246,14 @@ async function initializeAriClient() {
 
         await startExternalAIWebSocket(channel.id);
       } catch (e) {
-        logger.error(`Error in SIP channel ${channel.id}: ${e.message}`);
+        logger.error(`Critical error in SIP channel ${channel.id}: ${e.message}`);
+        // Hangup the call on any error
+        try {
+          await ariClient.channels.hangup({ channelId: channel.id });
+          logger.info(`Channel ${channel.id} hung up due to error`);
+        } catch (hangupErr) {
+          logger.error(`Failed to hangup channel ${channel.id}: ${hangupErr.message}`);
+        }
         await cleanupChannel(channel.id);
       }
     });
@@ -253,20 +266,32 @@ async function initializeAriClient() {
       } else if (channel.name && channel.name.startsWith('Local/')) {
         logger.info(`Local channel ${channel.id} ended, no cleanup needed`);
       } else {
+        // Close WebSocket connection when call ends
+        const channelData = sipMap.get(channel.id);
+        if (channelData) {
+          if (channelData.ws && !channelData.wsClosed) {
+            try {
+              logger.info(`Closing WebSocket for channel ${channel.id} on StasisEnd`);
+              channelData.ws.close();
+              channelData.wsClosed = true;
+              sipMap.set(channel.id, channelData);
+            } catch (e) {
+              logger.error(`Error closing WebSocket for ${channel.id}: ${e.message}`);
+            }
+          }
+        }
+        
         try {
           await ariClient.channels.get({ channelId: channel.id });
           logger.info(`Channel ${channel.id} still active, skipping cleanup`);
         } catch (e) {
           if (e.message.includes('Channel not found')) {
-            logger.info(`Channel ${channel.id} already hung up, no cleanup needed`);
-            const channelData = sipMap.get(channel.id);
-            if (channelData && channelData.ws && !channelData.wsClosed && typeof channelData.ws.close === 'function') {
-              logger.info(`Closing WebSocket for channel ${channel.id} on StasisEnd`);
-              channelData.ws.close();
-            }
+            logger.info(`Channel ${channel.id} already hung up, proceeding with cleanup`);
             await cleanupChannel(channel.id);
           } else {
             logger.error(`Error checking channel ${channel.id} state: ${e.message}`);
+            // Proceed with cleanup anyway to prevent resource leaks
+            await cleanupChannel(channel.id);
           }
         }
       }

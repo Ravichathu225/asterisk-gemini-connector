@@ -26,30 +26,64 @@ function releaseRtpPort(port) {
 }
 
 function startRTPReceiver(channelId, port) {
-  const rtpReceiver = dgram.createSocket('udp4');
-  rtpReceiver.isOpen = true;
-  rtpReceivers.set(channelId, rtpReceiver);
+  return new Promise((resolve, reject) => {
+    const rtpReceiver = dgram.createSocket('udp4');
+    rtpReceiver.isOpen = true;
+    rtpReceivers.set(channelId, rtpReceiver);
 
-  rtpReceiver.on('listening', () => logger.info(`RTP Receiver for ${channelId} listening on 127.0.0.1:${port}`));
-  rtpReceiver.on('message', (msg, rinfo) => {
-    const channelData = sipMap.get(channelId);
-    if (channelData && !channelData.rtpSource) {
-      channelData.rtpSource = { address: rinfo.address, port: rinfo.port };
-      sipMap.set(channelId, channelData);
-      logger.info(`RTP source assigned for ${channelId}: ${rinfo.address}:${rinfo.port}`);
-    }
-    if (channelData && channelData.ws && channelData.ws.readyState === 1) {
-      const muLawData = msg.slice(12);
-      // Send audio to external AI server
-      channelData.ws.send(JSON.stringify({ 
-        type: 'audio.input', 
-        audio: muLawData.toString('base64'),
-        format: 'g711_ulaw'
-      }));
+    rtpReceiver.on('listening', () => {
+      logger.info(`RTP Receiver for ${channelId} listening on 127.0.0.1:${port}`);
+      resolve();
+    });
+    
+    rtpReceiver.on('message', (msg, rinfo) => {
+      try {
+        const channelData = sipMap.get(channelId);
+        if (channelData && !channelData.rtpSource) {
+          channelData.rtpSource = { address: rinfo.address, port: rinfo.port };
+          sipMap.set(channelId, channelData);
+          logger.info(`RTP source assigned for ${channelId}: ${rinfo.address}:${rinfo.port}`);
+        }
+        if (channelData && channelData.ws && channelData.ws.readyState === 1) {
+          const muLawData = msg.slice(12);
+          // Send audio to external AI server
+          channelData.ws.send(JSON.stringify({ 
+            type: 'audio.input', 
+            audio: muLawData.toString('base64'),
+            format: 'g711_ulaw'
+          }));
+        }
+      } catch (e) {
+        logger.error(`Error processing RTP message for ${channelId}: ${e.message}`);
+      }
+    });
+    
+    rtpReceiver.on('error', (err) => {
+      logger.error(`RTP Receiver error for ${channelId}: ${err.message}`);
+      
+      // Hangup call on RTP receiver error
+      (async () => {
+        try {
+          const { ariClient } = require('./asterisk');
+          if (ariClient && sipMap.has(channelId)) {
+            await ariClient.channels.hangup({ channelId: channelId });
+            logger.info(`Call ${channelId} hung up due to RTP receiver error`);
+          }
+        } catch (hangupErr) {
+          logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+        }
+      })();
+      
+      reject(err);
+    });
+    
+    try {
+      rtpReceiver.bind(port, '127.0.0.1');
+    } catch (e) {
+      logger.error(`Failed to bind RTP receiver for ${channelId} on port ${port}: ${e.message}`);
+      reject(e);
     }
   });
-  rtpReceiver.on('error', (err) => logger.error(`RTP Receiver error for ${channelId}: ${err.message}`));
-  rtpReceiver.bind(port, '127.0.0.1');
 }
 
 function buildRTPHeader(seq, timestamp, ssrc) {
@@ -166,6 +200,22 @@ async function streamAudio(channelId, rtpSource) {
       rtpSender.send(rtpPacket, sendPort, sendAddress, (err) => {
         if (err) {
           logger.error(`Error sending RTP packet for ${channelId} to ${sendAddress}:${sendPort}: ${err.message}`);
+          
+          // Hangup call on critical RTP send errors
+          if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.code === 'ENETUNREACH') {
+            logger.error(`Critical RTP error for ${channelId}, hanging up call`);
+            (async () => {
+              try {
+                const { ariClient } = require('./asterisk');
+                if (ariClient && sipMap.has(channelId)) {
+                  await ariClient.channels.hangup({ channelId: channelId });
+                  logger.info(`Call ${channelId} hung up due to critical RTP error`);
+                }
+              } catch (hangupErr) {
+                logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+              }
+            })();
+          }
         } else {
           totalPacketsSent++;
           totalBytesSent += samplesPerPacket;

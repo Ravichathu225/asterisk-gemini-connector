@@ -187,7 +187,19 @@ async function startExternalAIWebSocket(channelId) {
         case 'error':
           logger.error(`AI error for ${channelId}: ${response.message || response.error}`);
           if (response.fatal) {
+            logger.error(`Fatal AI error for ${channelId}, closing WebSocket and hanging up call`);
             ws.close();
+            
+            // Hangup the call on fatal AI error
+            (async () => {
+              try {
+                const ariClient = require('./asterisk').ariClient;
+                await ariClient.channels.hangup({ channelId: channelId });
+                logger.info(`Call ${channelId} hung up due to fatal AI error`);
+              } catch (hangupErr) {
+                logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+              }
+            })();
           }
           break;
 
@@ -225,78 +237,85 @@ async function startExternalAIWebSocket(channelId) {
       ws.on('open', async () => {
         logClient(`External AI WebSocket connected for ${channelId}`);
         
-        // Fetch updated channel data
-        channelData = sipMap.get(channelId);
-        const fromNumber = channelData.fromNumber || 'unknown';
-        const toNumber = channelData.toNumber || 'unknown';
-        logger.info(`Sending call context for ${channelId}: From ${fromNumber} to ${toNumber}`);
-
-        // Fetch agent settings based on toNumber
-        const getAgentSettings = new AgentSetting(toNumber);
-        await getAgentSettings._fetchAgentSettings();
-
-        // Check account balance before proceeding
-        const agent_accountBalance = getAgentSettings.accountBalance;
-        if (agent_accountBalance <= 0) {
-          logger.warn(`Insufficient account balance (${agent_accountBalance}) for ${channelId}. Disconnecting call.`);
-          ws.close();
-          
-          // Hangup the call
-          try {
-            const ariClient = require('./asterisk').ariClient;
-            await ariClient.channels.hangup({ channelId: channelId });
-            logger.info(`Call ${channelId} hung up due to insufficient balance`);
-          } catch (e) {
-            logger.error(`Error hanging up call ${channelId}: ${e.message}`);
-          }
-          return;
-        }
-        
-        logger.info(`Account balance check passed for ${channelId}: Balance = ${agent_accountBalance}`);
-
-        // Attach agent settings to channel data
-        const agent_prompt = getAgentSettings.prompt;
-        const agent_voice = getAgentSettings.voice;
-        const agent_temperature = getAgentSettings.temperature;
-        const agent_maxTokens = getAgentSettings.maxTokens;
-        const agent_name = getAgentSettings.name;
-        const agent_userId = getAgentSettings.userId;
-        const agent_orgUid = getAgentSettings.orgUid;
-        const agent_id = getAgentSettings.agentId;
-        const agent_generateResponseModel = getAgentSettings.generateResponseModel;
-        const agent_costOfCall = getAgentSettings.costOfCall;
-        // Send initial session configuration to AI server
-        // Customize this based on your AI server's protocol
-        const sessionConfig = {
-          type: 'session.init',
-          config: {
-            audio_format: 'g711_ulaw',  // Or 'pcm16' depending on your AI
-            sample_rate: 8000,
-            channels: 1,
-            voice: agent_voice,
-            system_prompt: agent_prompt,
-            temperature: agent_temperature,
-            max_tokens: agent_maxTokens,
-            user_id: agent_userId,
-            agent_name: agent_name,
-            org_uid: agent_orgUid,
-            agent_id: agent_id,
-            account_balance: agent_accountBalance,
-            response_model: agent_generateResponseModel,
-            cost_of_call_per_minute: agent_costOfCall || 0.27,
-            session_id: uuid(),
-            // Add call context here
-            call_context: {
-              from_number: fromNumber,
-              to_number: toNumber
-            },
-          }
-        };
-
-        ws.send(JSON.stringify(sessionConfig));
-        logClient(`Session configuration sent for ${channelId}`);
-
         try {
+          // Fetch updated channel data
+          channelData = sipMap.get(channelId);
+          if (!channelData) {
+            logger.error(`Channel ${channelId} not found in sipMap after WebSocket open`);
+            ws.close();
+            return;
+          }
+          
+          const fromNumber = channelData.fromNumber || 'unknown';
+          const toNumber = channelData.toNumber || 'unknown';
+          logger.info(`Sending call context for ${channelId}: From ${fromNumber} to ${toNumber}`);
+
+          // Fetch agent settings based on toNumber
+          const getAgentSettings = new AgentSetting(toNumber);
+          await getAgentSettings._fetchAgentSettings();
+
+          // Check account balance before proceeding
+          const agent_accountBalance = getAgentSettings.accountBalance;
+          if (agent_accountBalance <= 0) {
+            logger.warn(`Insufficient account balance (${agent_accountBalance}) for ${channelId}. Disconnecting call.`);
+            ws.close();
+            
+            // Hangup the call
+            try {
+              const ariClient = require('./asterisk').ariClient;
+              await ariClient.channels.hangup({ channelId: channelId });
+              logger.info(`Call ${channelId} hung up due to insufficient balance`);
+            } catch (e) {
+              logger.error(`Error hanging up call ${channelId}: ${e.message}`);
+            }
+            return;
+          }
+          
+          logger.info(`Account balance check passed for ${channelId}: Balance = ${agent_accountBalance}`);
+
+          // Attach agent settings to channel data
+          const agent_prompt = getAgentSettings.prompt;
+          const agent_voice = getAgentSettings.voice;
+          const agent_temperature = getAgentSettings.temperature;
+          const agent_maxTokens = getAgentSettings.maxTokens;
+          const agent_name = getAgentSettings.name;
+          const agent_userId = getAgentSettings.userId;
+          const agent_orgUid = getAgentSettings.orgUid;
+          const agent_id = getAgentSettings.agentId;
+          const agent_generateResponseModel = getAgentSettings.generateResponseModel;
+          const agent_costOfCall = getAgentSettings.costOfCall;
+          
+          // Send initial session configuration to AI server
+          // Customize this based on your AI server's protocol
+          const sessionConfig = {
+            type: 'session.init',
+            config: {
+              audio_format: 'g711_ulaw',  // Or 'pcm16' depending on your AI
+              sample_rate: 8000,
+              channels: 1,
+              voice: agent_voice,
+              system_prompt: agent_prompt,
+              temperature: agent_temperature,
+              max_tokens: agent_maxTokens,
+              user_id: agent_userId,
+              agent_name: agent_name,
+              org_uid: agent_orgUid,
+              agent_id: agent_id,
+              account_balance: agent_accountBalance,
+              response_model: agent_generateResponseModel,
+              cost_of_call_per_minute: agent_costOfCall || 0.27,
+              session_id: uuid(),
+              // Add call context here
+              call_context: {
+                from_number: fromNumber,
+                to_number: toNumber
+              },
+            }
+          };
+
+          ws.send(JSON.stringify(sessionConfig));
+          logClient(`Session configuration sent for ${channelId}`);
+
           // Set up RTP audio streaming
           const rtpSource = channelData.rtpSource || { address: '127.0.0.1', port: 12000 };
           streamHandler = await streamAudio(channelId, rtpSource);
@@ -318,6 +337,17 @@ async function startExternalAIWebSocket(channelId) {
           resolve(ws);
         } catch (e) {
           logger.error(`Error setting up WebSocket for ${channelId}: ${e.message}`);
+          ws.close();
+          
+          // Hangup the call on setup error
+          try {
+            const ariClient = require('./asterisk').ariClient;
+            await ariClient.channels.hangup({ channelId: channelId });
+            logger.info(`Call ${channelId} hung up due to WebSocket setup error`);
+          } catch (hangupErr) {
+            logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+          }
+          
           reject(e);
         }
       });
@@ -333,26 +363,65 @@ async function startExternalAIWebSocket(channelId) {
 
       ws.on('error', (e) => {
         logger.error(`WebSocket error for ${channelId}: ${e.message}`);
+        
+        // Hangup call on WebSocket error
+        const hangupCall = async () => {
+          try {
+            const ariClient = require('./asterisk').ariClient;
+            if (ariClient && sipMap.has(channelId)) {
+              await ariClient.channels.hangup({ channelId: channelId });
+              logger.info(`Call ${channelId} hung up due to WebSocket error`);
+            }
+          } catch (hangupErr) {
+            logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+          }
+        };
+        
         if (retryCount < maxRetries && sipMap.has(channelId)) {
           retryCount++;
           logger.info(`Retrying connection (${retryCount}/${maxRetries}) for ${channelId}`);
           setTimeout(() => connectWebSocket().then(resolve).catch(reject), 1000);
         } else {
-          reject(new Error(`Failed WebSocket after ${maxRetries} attempts`));
+          logger.error(`Failed WebSocket after ${maxRetries} attempts for ${channelId}, hanging up call`);
+          hangupCall().then(() => reject(new Error(`Failed WebSocket after ${maxRetries} attempts`)));
         }
       });
 
       const handleClose = (code, reason) => {
         logger.info(`WebSocket closed for ${channelId} (code: ${code}, reason: ${reason})`);
-        channelData.wsClosed = true;
-        channelData.ws = null;
-        sipMap.set(channelId, channelData);
+        
+        // Update channel data
+        const channelData = sipMap.get(channelId);
+        if (channelData) {
+          channelData.wsClosed = true;
+          channelData.ws = null;
+          sipMap.set(channelId, channelData);
+        }
+        
         ws.off('close', handleClose);
         
         const cleanupResolve = cleanupPromises.get(`ws_${channelId}`);
         if (cleanupResolve) {
           cleanupResolve();
           cleanupPromises.delete(`ws_${channelId}`);
+        }
+        
+        // Hangup call when WebSocket closes (if not already hung up)
+        if (sipMap.has(channelId)) {
+          (async () => {
+            try {
+              const ariClient = require('./asterisk').ariClient;
+              await ariClient.channels.get({ channelId: channelId });
+              await ariClient.channels.hangup({ channelId: channelId });
+              logger.info(`Call ${channelId} hung up due to WebSocket closure`);
+            } catch (e) {
+              if (e.message.includes('Channel not found') || e.message.includes('Channel not in Stasis')) {
+                logger.info(`Channel ${channelId} already hung up during WebSocket closure`);
+              } else {
+                logger.error(`Error hanging up call ${channelId} on WebSocket close: ${e.message}`);
+              }
+            }
+          })();
         }
       };
       ws.on('close', handleClose);
@@ -371,6 +440,18 @@ async function startExternalAIWebSocket(channelId) {
     await connectWebSocket();
   } catch (e) {
     logger.error(`Failed to start WebSocket for ${channelId}: ${e.message}`);
+    
+    // Hangup the call on WebSocket initialization failure
+    try {
+      const ariClient = require('./asterisk').ariClient;
+      if (ariClient && sipMap.has(channelId)) {
+        await ariClient.channels.hangup({ channelId: channelId });
+        logger.info(`Call ${channelId} hung up due to WebSocket initialization failure`);
+      }
+    } catch (hangupErr) {
+      logger.error(`Error hanging up call ${channelId}: ${hangupErr.message}`);
+    }
+    
     throw e;
   }
 }
